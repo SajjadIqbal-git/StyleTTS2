@@ -13,6 +13,9 @@ from tempfile import NamedTemporaryFile
 from scipy.io.wavfile import write  
 import os
 from fastapi.responses import JSONResponse
+from transformers import AutoTokenizer
+tokenizer = AutoTokenizer.from_pretrained("albert-base-v2")  # or your specific model
+
 
 app = FastAPI()
 
@@ -41,13 +44,13 @@ class LJSynthesizeRequest(BaseModel):
     text: str
     steps: int
 
-
+#_____________________
 @app.post("/synthesize/")
 async def synthesize(request: SynthesizeRequest):
     text = request.text.strip()
     voice = request.voice.lower()
     lngsteps = request.lngsteps
-    
+
     if not text:
         raise HTTPException(status_code=400, detail="You must enter some text")
     if len(text) > 50000:
@@ -57,13 +60,21 @@ async def synthesize(request: SynthesizeRequest):
     print(text)
     print("*** end ***")
 
-    texts = txtsplit(text)
+    # Tokenize and split text into chunks of up to 512 tokens
+    tokens = tokenizer(text, return_tensors="pt", truncation=True, max_length=512, add_special_tokens=True)
+    chunks = tokens.input_ids.split(512, dim=-1)  # Split into 512-token chunks
+
     audio_segments = []
 
-    for t in texts:
-        audio_data = styletts2importable.inference(t, voices[voice], alpha=0.3, beta=0.7, diffusion_steps=lngsteps, embedding_scale=1)
-        
-        # Convert audio_data (numpy array) to a temporary WAV file
+    # Process each chunk
+    for token_chunk in chunks:
+        # Decode each token chunk back to text for compatibility with your function
+        chunk_text = tokenizer.decode(token_chunk[0], skip_special_tokens=True)
+
+        # Inference on each text chunk
+        audio_data = styletts2importable.inference(chunk_text, voices[voice], alpha=0.3, beta=0.7, diffusion_steps=lngsteps, embedding_scale=1)
+
+        # Convert to temporary WAV file
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
             wav_file_path = wav_file.name
             audio_data = (audio_data * 32767).astype(np.int16)  # Scale to int16
@@ -77,6 +88,7 @@ async def synthesize(request: SynthesizeRequest):
 
     # Return the first audio segment for simplicity
     return FileResponse(audio_segments[0], media_type="audio/mpeg", filename="synthesized_audio.mp3")
+
 
 
 
